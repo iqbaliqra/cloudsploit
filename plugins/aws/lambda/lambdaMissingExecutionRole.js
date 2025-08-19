@@ -2,22 +2,18 @@ var async = require('async');
 var helpers = require('../../../helpers/aws');
 
 module.exports = {
-    title: 'Lambda Missing Execution Role',
+    title: 'Lambda Functions Overview with Assigned Roles',
     category: 'Lambda',
     domain: 'Serverless',
     severity: 'High',
-    description: 'Ensure that all AWS Lambda functions have an assigned execution role to operate securely and successfully.',
-    more_info: 'An execution role provides the permissions a Lambda function needs to access AWS services and resources. Functions without execution roles cannot access other AWS services.',
-    link: 'https://www.trendmicro.com/cloudoneconformity/knowledge-base/aws/Lambda/referencing-missing-execution-role.html',
-    recommended_action: 'Modify the Lambda function and assign an execution role.',
-    apis: ['Lambda:listFunctions', 'Lambda:getFunction', 'IAM:getRole'],
+    description: 'List all AWS Lambda functions and verify that their assigned IAM roles exist.',
+    more_info: 'This plugin uses Lambda:listFunctions, Lambda:getFunction, IAM:listRoles, and IAM:getRole to fetch Lambda and IAM details.',
+    recommended_action: 'Ensure all Lambda functions have valid IAM roles assigned.',
+    apis: ['Lambda:listFunctions', 'Lambda:getFunction', 'IAM:listRoles', 'IAM:getRole'],
     realtime_triggers: [
         'lambda:CreateFunction',
         'lambda:UpdateFunctionConfiguration',
         'lambda:DeleteFunction',
-        'iam:RemoveRole',
-        'iam:AddRole',
-        'iam:UpdateRole'
     ],
 
     run: function(cache, settings, callback) {
@@ -26,60 +22,88 @@ module.exports = {
         var regions = helpers.regions(settings);
 
         async.each(regions.lambda, function(region, rcb) {
-            var listFunctions = helpers.addSource(cache, source,
-                ['lambda', 'listFunctions', region]);
 
+            // Fetch Lambda functions
+            var listFunctions = helpers.addSource(cache, source, ['lambda', 'listFunctions', region]);
             if (!listFunctions) return rcb();
 
             if (listFunctions.err || !listFunctions.data) {
-                helpers.addResult(results, 3,
-                    `Unable to query for Lambda functions: ${helpers.addError(listFunctions)}`, region);
+                helpers.addResult(results, 3, `Unable to query Lambda functions: ${helpers.addError(listFunctions)}`, region);
                 return rcb();
             }
 
             if (!listFunctions.data.length) {
-                helpers.addResult(results, 0, 'No Lambda functions found', region);
+                helpers.addResult(results, 0, 'No Lambda functions found. Pass.', region);
+                return rcb();
+            }
+
+            // Fetch IAM roles once per region
+            var listRoles = helpers.addSource(cache, source, ['iam', 'listRoles', region]);
+            if (!listRoles || listRoles.err || !listRoles.data || !listRoles.data.length) {
+                // If IAM roles cannot be fetched, fail
+                helpers.addResult(results, 3, `Unable to query IAM roles: ${helpers.addError(listRoles)}`, region);
                 return rcb();
             }
 
             async.each(listFunctions.data, function(lambdaFunction, cb) {
                 if (!lambdaFunction.FunctionName) return cb();
 
-                var getFunction = helpers.addSource(cache, source,
-                    ['lambda', 'getFunction', region, lambdaFunction.FunctionName]);
-
+                // Get function details
+                var getFunction = helpers.addSource(cache, source, ['lambda', 'getFunction', region, lambdaFunction.FunctionName]);
                 if (!getFunction || getFunction.err || !getFunction.data || !getFunction.data.Configuration) {
                     helpers.addResult(results, 3,
                         `Unable to get Lambda function details: ${helpers.addError(getFunction)}`,
-                        region, lambdaFunction.FunctionArn);
+                        region, lambdaFunction.FunctionArn
+                    );
                     return cb();
                 }
 
                 var lambdaConfig = getFunction.data.Configuration;
-                
-                if (!lambdaConfig.Role) {
-                    helpers.addResult(results, 2,
-                        'Lambda function does not have an execution role assigned',
-                        region, lambdaFunction.FunctionArn);
-                } else {
-                    var getRole = helpers.addSource(cache, source,
-                        ['iam', 'getRole',region, lambdaConfig.Role]);
+
+
+                // Get Lambda's assigned IAM role ARN
+                var assignedRoleArn = lambdaConfig.Role || null;
+
+                if (!assignedRoleArn) {
+                    // No role assigned = fail
+                    helpers.addResult(results, 3,
+                        `Lambda function "${lambdaFunction.FunctionName}" has NO assigned IAM role!`,
+                        region, lambdaFunction.FunctionArn
+                    );
+                    return cb();
+                }
+
+                // Check if assigned role exists in IAM roles list
+                var roleObj = listRoles.data.find(r => assignedRoleArn.endsWith(r.RoleName));
+
+                if (roleObj) {
+                    // Role exists, optional: get role details
+                    var getRole = helpers.addSource(cache, source, ['iam', 'getRole', region, roleObj.RoleName]);
 
                     if (!getRole || getRole.err || !getRole.data || !getRole.data.Role) {
                         helpers.addResult(results, 2,
-                            `Lambda function execution role "${lambdaConfig.Role}" does not exist`,
-                            region, lambdaFunction.FunctionArn);
+                            `Assigned IAM role exists but unable to fetch details: ${assignedRoleArn}`,
+                            region, lambdaFunction.FunctionArn
+                        );
                     } else {
                         helpers.addResult(results, 0,
-                            'Lambda function has a valid execution role assigned',
-                            region, lambdaFunction.FunctionArn);
+                            `Assigned IAM role exists and retrieved: ${assignedRoleArn}`,
+                            region, lambdaFunction.FunctionArn
+                        );
                     }
+                } else {
+                    
+                    helpers.addResult(results, 2,
+                        `Assigned IAM role NOT found: ${assignedRoleArn}`,
+                        region, lambdaFunction.FunctionArn
+                    );
                 }
-                
+
                 cb();
             }, function() {
                 rcb();
             });
+
         }, function() {
             callback(null, results, source);
         });
