@@ -521,6 +521,7 @@ module.exports = {
         'lambdaNetworkExposure'         : require(__dirname + '/plugins/aws/lambda/lambdaNetworkExposure.js'),
         'lambdaPrivilegeAnalysis'       : require(__dirname + '/plugins/aws/lambda/lambdaPrivilegeAnalysis.js'),
         'lambdaMissingExecutionRole'    : require(__dirname + '/plugins/aws/lambda/lambdaMissingExecutionRole'), 
+        'lambdaMultipleRole'            : require(__dirname +'/plugins/aws/lambda/lambdaMultipleRole'),
 
         'webServerPublicAccess'         : require(__dirname + '/plugins/aws/mwaa/webServerPublicAccess.js'),
         'environmentAdminPrivileges'    : require(__dirname + '/plugins/aws/mwaa/environmentAdminPrivileges.js'),
